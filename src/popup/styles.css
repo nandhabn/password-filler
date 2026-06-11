@@ -199,6 +199,41 @@ button.primary:hover {
   text-transform: lowercase;
 }
 
+.site-group-tools {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.association-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 11px;
+  color: #c8d2ff;
+  background: rgba(15, 52, 96, 0.55);
+  border: 1px solid #1e4f86;
+  border-radius: 8px;
+  padding: 8px 10px;
+  margin: 8px 12px 0;
+}
+
+.link-btn {
+  border: 1px solid #2c4d76;
+  border-radius: 6px;
+  padding: 4px 6px;
+  background: #0f3460;
+  color: #eaeaea;
+  font-size: 11px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.link-btn:hover {
+  background: #14467e;
+}
+
 .site-link {
   text-decoration: none;
   font-size: 14px;

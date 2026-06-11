@@ -7,6 +7,8 @@ interface PasswordEntry {
   password: string;
 }
 
+type SiteAssociations = Record<string, string>;
+
 export default function Passwords() {
   const [entries, setEntries] = useState<PasswordEntry[]>([]);
   const [visibleIds, setVisibleIds] = useState<Set<string>>(new Set());
@@ -14,16 +16,79 @@ export default function Passwords() {
   const [editSite, setEditSite] = useState('');
   const [editUsername, setEditUsername] = useState('');
   const [editPassword, setEditPassword] = useState('');
+  const [activeSite, setActiveSite] = useState('');
+  const [associations, setAssociations] = useState<SiteAssociations>({});
 
   useEffect(() => {
-    chrome.storage.local.get(['passwords'], (result) => {
+    chrome.storage.local.get(['passwords', 'siteAssociations'], (result) => {
       setEntries(result.passwords || []);
+      setAssociations(result.siteAssociations || {});
+    });
+
+    chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+      const tabUrl = tabs[0]?.url;
+      if (!tabUrl) return;
+
+      try {
+        setActiveSite(new URL(tabUrl).hostname.toLowerCase());
+      } catch {
+        // ignore invalid/unsupported URLs like chrome:// pages
+      }
     });
   }, []);
 
   const saveEntries = (updated: PasswordEntry[]) => {
     setEntries(updated);
     chrome.storage.local.set({ passwords: updated });
+  };
+
+  const normalizeSite = (site: string) => site.trim().toLowerCase();
+
+  const resolveAssociatedSite = (site: string, map: SiteAssociations) => {
+    let current = normalizeSite(site);
+    const visited = new Set<string>();
+
+    while (map[current] && !visited.has(current)) {
+      visited.add(current);
+      current = normalizeSite(map[current]);
+    }
+
+    return current;
+  };
+
+  const saveAssociations = (updated: SiteAssociations) => {
+    setAssociations(updated);
+    chrome.storage.local.set({ siteAssociations: updated });
+  };
+
+  const associateActiveSiteTo = (targetSite: string) => {
+    if (!activeSite) return;
+
+    const normalizedActive = normalizeSite(activeSite);
+    const normalizedTarget = normalizeSite(targetSite);
+    const resolvedTarget = resolveAssociatedSite(normalizedTarget, associations);
+
+    const next = { ...associations };
+
+    if (normalizedActive === resolvedTarget) {
+      delete next[normalizedActive];
+      saveAssociations(next);
+      return;
+    }
+
+    next[normalizedActive] = resolvedTarget;
+    saveAssociations(next);
+  };
+
+  const clearActiveSiteAssociation = () => {
+    if (!activeSite) return;
+
+    const normalizedActive = normalizeSite(activeSite);
+    if (!associations[normalizedActive]) return;
+
+    const next = { ...associations };
+    delete next[normalizedActive];
+    saveAssociations(next);
   };
 
   const addNewEntry = () => {
@@ -77,7 +142,7 @@ export default function Passwords() {
     if (!editingId || !editSite.trim() || !editUsername.trim() || !editPassword.trim()) return;
     const updated = entries.map(e =>
       e.id === editingId
-        ? { ...e, site: editSite.trim(), username: editUsername.trim(), password: editPassword.trim() }
+        ? { ...e, site: normalizeSite(editSite), username: editUsername.trim(), password: editPassword.trim() }
         : e
     );
     saveEntries(updated);
@@ -150,10 +215,24 @@ export default function Passwords() {
         <button onClick={importPasswords} title="Import passwords from JSON file">⬆️ Import</button>
       </div>
 
+      {activeSite && (
+        <div className="association-banner">
+          <span>
+            Current site: <strong>{activeSite}</strong>
+            {associations[normalizeSite(activeSite)]
+              ? ` -> ${resolveAssociatedSite(activeSite, associations)}`
+              : ''}
+          </span>
+          {associations[normalizeSite(activeSite)] && (
+            <button className="link-btn" onClick={clearActiveSiteAssociation}>Clear Link</button>
+          )}
+        </div>
+      )}
+
       {entries.length === 0 && <p className="empty">No saved passwords</p>}
       {Object.entries(
         entries.reduce<Record<string, PasswordEntry[]>>((groups, entry) => {
-          const key = entry.site || 'Other';
+          const key = resolveAssociatedSite(entry.site || 'other', associations);
           if (!groups[key]) groups[key] = [];
           groups[key].push(entry);
           return groups;
@@ -162,13 +241,26 @@ export default function Passwords() {
         <div key={site} className="site-group">
           <div className="site-group-header">
             <span>{site}</span>
-            <a
-              href={site.startsWith('http') ? site : `https://${site}`}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="site-link"
-              title={`Open ${site}`}
-            >🔗</a>
+            <div className="site-group-tools">
+              {activeSite && normalizeSite(activeSite) !== normalizeSite(site) && (
+                <button
+                  className="link-btn"
+                  onClick={() => associateActiveSiteTo(site)}
+                  title={`Associate ${activeSite} with ${site}`}
+                >
+                  {resolveAssociatedSite(activeSite, associations) === normalizeSite(site)
+                    ? 'Associated'
+                    : 'Associate Here'}
+                </button>
+              )}
+              <a
+                href={site.startsWith('http') ? site : `https://${site}`}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="site-link"
+                title={`Open ${site}`}
+              >🔗</a>
+            </div>
           </div>
           {groupEntries.map(entry => (
         <div key={entry.id} className="card">

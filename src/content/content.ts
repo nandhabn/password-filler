@@ -74,6 +74,19 @@ chrome.runtime.onMessage.addListener((message) => {
     setNativeValue(passwordInput, message.password);
   }
 
+  // Try to click the submit button if available
+  const submitBtn = findSubmitButton(scope);
+  if (submitBtn) {
+    console.debug("[notes-with-ai] clicking submit button", {
+      tag: submitBtn.tagName,
+      type: (submitBtn as HTMLButtonElement).type,
+      text: submitBtn.textContent?.trim().slice(0, 30),
+    });
+    setTimeout(() => submitBtn.click(), 100);
+  } else {
+    console.debug("[notes-with-ai] no submit button found, manual submission required");
+  }
+
   lastContextInput = null;
 
   return false;
@@ -169,4 +182,36 @@ function setNativeValue(el: HTMLInputElement, value: string) {
     valueLength: el.value.length,
     success: el.value === value,
   });
+}
+
+// Find the submit button within the given scope
+function findSubmitButton(scope: ParentNode): HTMLElement | null {
+  // 1. Look for input[type="submit"] or button[type="submit"]
+  const submitInput = scope.querySelector<HTMLElement>(
+    'input[type="submit"], button[type="submit"]'
+  );
+  if (submitInput && isVisible(submitInput)) return submitInput;
+
+  // 2. Look for buttons with submit-related text
+  const buttons = Array.from(
+    scope.querySelectorAll<HTMLElement>("button, [role='button'], a[class*='btn']")
+  ).filter(isVisible);
+
+  const submitPattern = /^(sign\s*in|log\s*in|login|submit|continue|next|enter)$/i;
+  for (const btn of buttons) {
+    const text = (btn.textContent || "").trim();
+    if (submitPattern.test(text)) return btn;
+  }
+
+  // 3. Fallback: button without explicit type (defaults to submit in forms)
+  const defaultButton = scope.querySelector<HTMLButtonElement>(
+    "button:not([type])"
+  );
+  if (defaultButton && isVisible(defaultButton)) return defaultButton;
+
+  return null;
+}
+
+function isVisible(el: HTMLElement): boolean {
+  return el.offsetParent !== null && !el.hidden && getComputedStyle(el).visibility !== "hidden";
 }

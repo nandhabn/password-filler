@@ -37,15 +37,20 @@ async function getActiveTabHostname(): Promise<string> {
 async function buildContextMenu() {
   await chrome.contextMenus.removeAll();
 
-  const result = await chrome.storage.local.get(["passwords"]);
+  const result = await chrome.storage.local.get(["passwords", "siteAssociations"]);
   const allPasswords: Array<{ id?: string; site: string; username: string; password: string }> =
     result.passwords || [];
+  const siteAssociations: Record<string, string> = result.siteAssociations || {};
 
   const hostname = await getActiveTabHostname();
+  const resolvedHostname = resolveAssociatedSite(hostname, siteAssociations);
 
   // Filter to entries matching the current site
-  const sitePasswords = hostname
-    ? allPasswords.filter((p) => hostname.includes(p.site) || p.site.includes(hostname))
+  const sitePasswords = resolvedHostname
+    ? allPasswords.filter((p) => {
+        const resolvedSite = resolveAssociatedSite(p.site, siteAssociations);
+        return siteMatches(resolvedHostname, resolvedSite);
+      })
     : [];
 
   // Use site-matched entries if any, otherwise show all
@@ -98,11 +103,17 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
   const result = await chrome.storage.local.get(["passwords"]);
   const allPasswords: Array<{ site: string; username: string; password: string }> =
     result.passwords || [];
+  const associationsResult = await chrome.storage.local.get(["siteAssociations"]);
+  const siteAssociations: Record<string, string> = associationsResult.siteAssociations || {};
 
   const hostname = tab.url ? new URL(tab.url).hostname : "";
+  const resolvedHostname = resolveAssociatedSite(hostname, siteAssociations);
 
-  const sitePasswords = hostname
-    ? allPasswords.filter((p) => hostname.includes(p.site) || p.site.includes(hostname))
+  const sitePasswords = resolvedHostname
+    ? allPasswords.filter((p) => {
+        const resolvedSite = resolveAssociatedSite(p.site, siteAssociations);
+        return siteMatches(resolvedHostname, resolvedSite);
+      })
     : [];
 
   const passwords = sitePasswords.length > 0 ? sitePasswords : allPasswords;
@@ -158,4 +169,25 @@ async function safeSendMessage(
       chrome.tabs.sendMessage(tabId, payload, callback);
     }
   });
+}
+
+function normalizeSite(site: string): string {
+  return site.trim().toLowerCase();
+}
+
+function resolveAssociatedSite(site: string, map: Record<string, string>): string {
+  let current = normalizeSite(site);
+  const visited = new Set<string>();
+
+  while (map[current] && !visited.has(current)) {
+    visited.add(current);
+    current = normalizeSite(map[current]);
+  }
+
+  return current;
+}
+
+function siteMatches(currentHost: string, configuredSite: string): boolean {
+  if (!currentHost || !configuredSite) return false;
+  return currentHost.includes(configuredSite) || configuredSite.includes(currentHost);
 }
