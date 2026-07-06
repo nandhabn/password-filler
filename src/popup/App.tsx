@@ -5,7 +5,7 @@ import Passwords from './components/Passwords';
 type Tab = 'notes' | 'passwords';
 
 export default function App() {
-  const [activeTab, setActiveTab] = useState<Tab>('notes');
+  const [activeTab, setActiveTab] = useState<Tab>('passwords');
 
   return (
     <div className="app">

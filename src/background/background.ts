@@ -138,6 +138,42 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
   await safeSendMessage(tab.id, payload);
 });
 
+chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  if (message.type !== "GET_SITE_PASSWORDS") return false;
+
+  const tabUrl = sender.tab?.url;
+
+  chrome.storage.local.get(["passwords", "siteAssociations"], (result) => {
+    const allPasswords: Array<{ id: string; site: string; username: string; password: string }> =
+      result.passwords || [];
+    const siteAssociations: Record<string, string> = result.siteAssociations || {};
+
+    if (!tabUrl) {
+      sendResponse([]);
+      return;
+    }
+
+    let hostname = "";
+    try {
+      hostname = new URL(tabUrl).hostname.toLowerCase();
+    } catch {
+      sendResponse([]);
+      return;
+    }
+
+    const resolvedHostname = resolveAssociatedSite(hostname, siteAssociations);
+
+    const matching = allPasswords.filter((p) => {
+      const resolvedSite = resolveAssociatedSite(p.site, siteAssociations);
+      return siteMatches(resolvedHostname, resolvedSite);
+    });
+
+    sendResponse(matching);
+  });
+
+  return true; // keep channel open for async sendResponse
+});
+
 async function safeSendMessage(
   tabId: number,
   payload: { type: string; username: string; password: string },

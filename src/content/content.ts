@@ -1,5 +1,205 @@
 let lastContextInput: HTMLInputElement | null = null;
 
+// ─── Inline autofill popup (Apple Passwords style) ───────────────────────────
+
+interface PasswordEntry {
+  id: string;
+  site: string;
+  username: string;
+  password: string;
+}
+
+let autofillPopup: HTMLElement | null = null;
+let autofillShadow: ShadowRoot | null = null;
+let autofillTriggerInput: HTMLInputElement | null = null;
+
+function removeAutofillPopup() {
+  if (autofillPopup) {
+    autofillPopup.remove();
+    autofillPopup = null;
+    autofillShadow = null;
+    autofillTriggerInput = null;
+  }
+}
+
+function showAutofillPopup(input: HTMLInputElement, entries: PasswordEntry[]) {
+  removeAutofillPopup();
+
+  const rect = input.getBoundingClientRect();
+  const host = document.createElement("div");
+  host.style.cssText = `
+    position: fixed;
+    left: ${rect.left}px;
+    top: ${rect.bottom + 4}px;
+    z-index: 2147483647;
+    pointer-events: auto;
+  `;
+
+  const shadow = host.attachShadow({ mode: "open" });
+  autofillPopup = host;
+  autofillShadow = shadow;
+  autofillTriggerInput = input;
+
+  const style = document.createElement("style");
+  style.textContent = `
+    :host { all: initial; }
+    .pw-popup {
+      background: #fff;
+      border-radius: 13px;
+      box-shadow: 0 8px 32px rgba(0,0,0,0.18), 0 1.5px 6px rgba(0,0,0,0.10);
+      padding: 6px 0;
+      min-width: 240px;
+      max-width: 320px;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      overflow: hidden;
+      border: 1px solid rgba(0,0,0,0.08);
+    }
+    .pw-header {
+      font-size: 11px;
+      font-weight: 600;
+      color: #888;
+      padding: 4px 14px 6px;
+      letter-spacing: 0.03em;
+      text-transform: uppercase;
+      border-bottom: 1px solid #f0f0f0;
+      display: flex;
+      align-items: center;
+      gap: 5px;
+    }
+    .pw-item {
+      display: flex;
+      align-items: center;
+      gap: 11px;
+      padding: 9px 14px;
+      cursor: pointer;
+      transition: background 0.1s;
+      user-select: none;
+    }
+    .pw-item:hover {
+      background: #f2f2f7;
+    }
+    .pw-icon {
+      width: 34px;
+      height: 34px;
+      border-radius: 8px;
+      background: linear-gradient(145deg, #007AFF, #0056cc);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 17px;
+      flex-shrink: 0;
+      box-shadow: 0 1px 4px rgba(0,122,255,0.3);
+    }
+    .pw-info {
+      display: flex;
+      flex-direction: column;
+      min-width: 0;
+    }
+    .pw-username {
+      font-size: 14px;
+      font-weight: 500;
+      color: #111;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .pw-site {
+      font-size: 12px;
+      color: #888;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+  `;
+
+  const popup = document.createElement("div");
+  popup.className = "pw-popup";
+
+  const header = document.createElement("div");
+  header.className = "pw-header";
+  header.innerHTML = `🔑 Passwords`;
+  popup.appendChild(header);
+
+  for (const entry of entries) {
+    const item = document.createElement("div");
+    item.className = "pw-item";
+    item.innerHTML = `
+      <div class="pw-icon">🔑</div>
+      <div class="pw-info">
+        <span class="pw-username">${escapeHtml(entry.username)}</span>
+        <span class="pw-site">${escapeHtml(entry.site)}</span>
+      </div>
+    `;
+    item.addEventListener("mousedown", (e) => {
+      // mousedown before blur so we can still fill
+      e.preventDefault();
+      removeAutofillPopup();
+      // Find form scope and fill
+      const form = input.closest("form") as HTMLFormElement | null;
+      const dialog = input.closest('[role="dialog"], [aria-modal="true"], .modal, dialog') as HTMLElement | null;
+      const scope: ParentNode = form || dialog || document;
+      const allInputs = Array.from(scope.querySelectorAll<HTMLInputElement>("input"))
+        .filter((el) => !el.disabled && el.offsetParent !== null);
+      const usernameInput = allInputs.find((el) => {
+        const t = el.type.toLowerCase();
+        return (t === "text" || t === "email") && isUsernameField(el);
+      }) || null;
+      const passwordInput = allInputs.find((el) => isPasswordField(el)) || null;
+      if (usernameInput) setNativeValue(usernameInput, entry.username);
+      if (passwordInput) setNativeValue(passwordInput, entry.password);
+    });
+    popup.appendChild(item);
+  }
+
+  shadow.appendChild(style);
+  shadow.appendChild(popup);
+  document.body.appendChild(host);
+}
+
+function escapeHtml(str: string): string {
+  return str.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+}
+
+async function onInputFocus(event: FocusEvent) {
+  const input = event.target as HTMLInputElement;
+  if (!input || input.disabled || input.readOnly) return;
+  const type = input.type.toLowerCase();
+  const isPassword = isPasswordField(input);
+  const isUsername = !isPassword && (type === "text" || type === "email") && isUsernameField(input);
+  if (!isPassword && !isUsername) return;
+
+  const matching: PasswordEntry[] = await chrome.runtime.sendMessage({ type: "GET_SITE_PASSWORDS" });
+
+  if (!matching || matching.length === 0) return;
+
+  showAutofillPopup(input, matching);
+}
+
+function onDocumentFocusOut(event: FocusEvent) {
+  const related = event.relatedTarget as Node | null;
+  // If focus moves outside the popup, dismiss
+  if (autofillPopup && (!related || !autofillPopup.contains(related))) {
+    // small delay to allow mousedown on popup item to fire first
+    setTimeout(() => {
+      if (autofillPopup && document.activeElement !== null) {
+        const shadow = autofillShadow;
+        if (!shadow || !shadow.contains(document.activeElement)) {
+          removeAutofillPopup();
+        }
+      }
+    }, 150);
+  }
+}
+
+document.addEventListener("focusin", onInputFocus as unknown as EventListener, true);
+document.addEventListener("focusout", onDocumentFocusOut as EventListener, true);
+document.addEventListener("click", (e) => {
+  const target = e.target as Node;
+  if (autofillPopup && !autofillPopup.contains(target) && target !== autofillTriggerInput) {
+    removeAutofillPopup();
+  }
+}, true);
+
 function isEditableField(target: Element): boolean {
   if (target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement) {
     return !target.disabled && !target.readOnly;
