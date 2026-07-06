@@ -147,6 +147,11 @@ function showAutofillPopup(input: HTMLInputElement, entries: PasswordEntry[]) {
       const passwordInput = allInputs.find((el) => isPasswordField(el)) || null;
       if (usernameInput) setNativeValue(usernameInput, entry.username);
       if (passwordInput) setNativeValue(passwordInput, entry.password);
+
+      const submitBtn = findSubmitButton(scope);
+      if (submitBtn) {
+        setTimeout(() => submitBtn.click(), 100);
+      }
     });
     popup.appendChild(item);
   }
