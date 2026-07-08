@@ -1,8 +1,9 @@
 import { useState } from 'react';
 import Notes from './components/Notes';
 import Passwords from './components/Passwords';
+import SiteAssociations from './components/SiteAssociations';
 
-type Tab = 'notes' | 'passwords';
+type Tab = 'notes' | 'passwords' | 'associations';
 
 export default function App() {
   const [activeTab, setActiveTab] = useState<Tab>('passwords');
@@ -22,9 +23,15 @@ export default function App() {
         >
           🔑 Passwords
         </button>
+        <button
+          className={activeTab === 'associations' ? 'active' : ''}
+          onClick={() => setActiveTab('associations')}
+        >
+          🌐 Associations
+        </button>
       </header>
       <main>
-        {activeTab === 'notes' ? <Notes /> : <Passwords />}
+        {activeTab === 'notes' ? <Notes /> : activeTab === 'passwords' ? <Passwords /> : <SiteAssociations />}
       </main>
     </div>
   );

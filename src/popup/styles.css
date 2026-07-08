@@ -97,6 +97,19 @@ button.primary:hover {
   position: relative;
 }
 
+.draggable-card {
+  cursor: grab;
+}
+
+.draggable-card:active {
+  cursor: grabbing;
+}
+
+.draggable-card.drag-over {
+  outline: 1px dashed #6a8fc9;
+  outline-offset: 2px;
+}
+
 .card h4 {
   font-size: 13px;
   color: #e94560;
@@ -118,6 +131,67 @@ button.primary:hover {
   display: flex;
   gap: 8px;
   margin: 8px 12px;
+}
+
+.passwords-toolbar {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.passwords-toolbar .import-export-actions {
+  flex: 1;
+}
+
+.more-menu {
+  position: relative;
+  margin-top: 8px;
+  margin-right: 12px;
+}
+
+.more-menu-trigger {
+  width: 32px;
+  height: 28px;
+  border: 1px solid #2c4d76;
+  border-radius: 8px;
+  background: #0f3460;
+  color: #eaeaea;
+  font-size: 18px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.more-menu-trigger:hover {
+  background: #14467e;
+}
+
+.more-menu-dropdown {
+  position: absolute;
+  right: 0;
+  top: 34px;
+  min-width: 180px;
+  border: 1px solid #2b3f66;
+  border-radius: 8px;
+  background: #101c35;
+  box-shadow: 0 8px 18px rgba(0, 0, 0, 0.35);
+  z-index: 20;
+}
+
+.more-menu-dropdown button {
+  width: 100%;
+  border: none;
+  border-radius: 8px;
+  background: transparent;
+  color: #eaeaea;
+  font-size: 12px;
+  text-align: left;
+  padding: 10px;
+  cursor: pointer;
+}
+
+.more-menu-dropdown button:hover {
+  background: rgba(80, 108, 160, 0.25);
 }
 
 .import-export-actions button {
@@ -258,4 +332,124 @@ button.primary:hover {
   color: #e94560;
   cursor: pointer;
   font-size: 12px;
+}
+
+.recently-deleted-panel {
+  margin: 8px 12px 0;
+  border: 1px solid #243350;
+  border-radius: 8px;
+  background: rgba(22, 33, 62, 0.55);
+  padding: 8px;
+}
+
+.recently-deleted-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 12px;
+  font-weight: 600;
+  color: #c8d2ff;
+  margin-bottom: 6px;
+}
+
+.recently-deleted-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  border-top: 1px solid #27344c;
+  padding-top: 6px;
+  margin-top: 6px;
+}
+
+.recently-deleted-row p {
+  font-size: 12px;
+  color: #d5ddff;
+}
+
+.recently-deleted-row span {
+  font-size: 11px;
+  color: #8ea0c4;
+}
+
+.recently-deleted-row small {
+  display: block;
+  margin-top: 4px;
+  color: #6d7f9f;
+  font-size: 10px;
+}
+
+.deleted-view {
+  margin: 4px 12px 0;
+}
+
+.deleted-view-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 12px;
+  font-weight: 600;
+  color: #c8d2ff;
+  margin-bottom: 8px;
+}
+
+.recently-deleted-card {
+  background: #16213e;
+  border: 1px solid #27344c;
+  border-radius: 8px;
+  padding: 8px;
+}
+
+.empty-inline {
+  font-size: 11px;
+  color: #6f7f9f;
+}
+
+.associations-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 10px;
+}
+
+.associations-header h3 {
+  font-size: 14px;
+  color: #e94560;
+}
+
+.association-row-card {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  background: #16213e;
+  border: 1px solid #1f345a;
+  border-radius: 8px;
+  padding: 10px;
+  margin-top: 8px;
+}
+
+.association-row-text p {
+  font-size: 12px;
+  color: #dce4ff;
+}
+
+.association-row-text span {
+  font-size: 11px;
+  color: #9eb0d8;
+}
+
+.association-row-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.association-edit-form {
+  width: 100%;
+}
+
+.association-edit-form input {
+  margin-bottom: 6px;
 }
