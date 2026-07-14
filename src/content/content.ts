@@ -9,6 +9,9 @@ interface PasswordEntry {
   password: string;
 }
 
+const AUTO_SUBMIT_STORAGE_KEY = "autoSubmitEnabled";
+const AUTO_SUBMIT_DEFAULT = true;
+
 let autofillPopup: HTMLElement | null = null;
 let autofillShadow: ShadowRoot | null = null;
 let autofillTriggerInput: HTMLInputElement | null = null;
@@ -22,9 +25,34 @@ function removeAutofillPopup() {
   }
 }
 
-function showAutofillPopup(input: HTMLInputElement, entries: PasswordEntry[]) {
+function attemptAutoSubmit(scope: ParentNode, shouldAutoSubmit: boolean) {
+  if (!shouldAutoSubmit) {
+    return;
+  }
+
+  const submitBtn = findSubmitButton(scope);
+  if (submitBtn) {
+    console.debug("[notes-with-ai] clicking submit button", {
+      tag: submitBtn.tagName,
+      type: (submitBtn as HTMLButtonElement).type,
+      text: submitBtn.textContent?.trim().slice(0, 30),
+    });
+    setTimeout(() => submitBtn.click(), 100);
+  } else {
+    console.debug(
+      "[notes-with-ai] no submit button found, manual submission required",
+    );
+  }
+}
+
+function showAutofillPopup(
+  input: HTMLInputElement,
+  entries: PasswordEntry[],
+  initialAutoSubmitEnabled: boolean,
+) {
   removeAutofillPopup();
 
+  let autoSubmitEnabled = initialAutoSubmitEnabled;
   const rect = input.getBoundingClientRect();
   const host = document.createElement("div");
   host.style.cssText = `
@@ -78,6 +106,11 @@ function showAutofillPopup(input: HTMLInputElement, entries: PasswordEntry[]) {
     .pw-item:hover {
       background: #f2f2f7;
     }
+    .pw-list {
+      max-height: 260px;
+      overflow-y: auto;
+      overscroll-behavior: contain;
+    }
     .pw-icon {
       width: 34px;
       height: 34px;
@@ -110,6 +143,30 @@ function showAutofillPopup(input: HTMLInputElement, entries: PasswordEntry[]) {
       overflow: hidden;
       text-overflow: ellipsis;
     }
+    .pw-footer {
+      border-top: 1px solid #f0f0f0;
+      padding: 8px 12px;
+      background: #fafafa;
+    }
+    .pw-autosubmit-label {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 12px;
+      color: #333;
+      cursor: pointer;
+      user-select: none;
+    }
+    .pw-autosubmit-icon {
+      font-size: 13px;
+      line-height: 1;
+    }
+    .pw-autosubmit-checkbox {
+      width: 14px;
+      height: 14px;
+      accent-color: #007AFF;
+      cursor: pointer;
+    }
   `;
 
   const popup = document.createElement("div");
@@ -119,6 +176,10 @@ function showAutofillPopup(input: HTMLInputElement, entries: PasswordEntry[]) {
   header.className = "pw-header";
   header.innerHTML = `🔑 Passwords`;
   popup.appendChild(header);
+
+  const list = document.createElement("div");
+  list.className = "pw-list";
+  popup.appendChild(list);
 
   for (const entry of entries) {
     const item = document.createElement("div");
@@ -136,33 +197,66 @@ function showAutofillPopup(input: HTMLInputElement, entries: PasswordEntry[]) {
       removeAutofillPopup();
       // Find form scope and fill
       const form = input.closest("form") as HTMLFormElement | null;
-      const dialog = input.closest('[role="dialog"], [aria-modal="true"], .modal, dialog') as HTMLElement | null;
+      const dialog = input.closest(
+        '[role="dialog"], [aria-modal="true"], .modal, dialog',
+      ) as HTMLElement | null;
       const scope: ParentNode = form || dialog || document;
-      const allInputs = Array.from(scope.querySelectorAll<HTMLInputElement>("input"))
-        .filter((el) => !el.disabled && el.offsetParent !== null);
-      const usernameInput = allInputs.find((el) => {
-        const t = el.type.toLowerCase();
-        return (t === "text" || t === "email") && isUsernameField(el);
-      }) || null;
+      const allInputs = Array.from(
+        scope.querySelectorAll<HTMLInputElement>("input"),
+      ).filter((el) => !el.disabled && el.offsetParent !== null);
+      const usernameInput =
+        allInputs.find((el) => {
+          const t = el.type.toLowerCase();
+          return (t === "text" || t === "email") && isUsernameField(el);
+        }) || null;
       const passwordInput = allInputs.find((el) => isPasswordField(el)) || null;
       if (usernameInput) setNativeValue(usernameInput, entry.username);
       if (passwordInput) setNativeValue(passwordInput, entry.password);
 
-      const submitBtn = findSubmitButton(scope);
-      if (submitBtn) {
-        setTimeout(() => submitBtn.click(), 100);
-      }
+      attemptAutoSubmit(scope, autoSubmitEnabled);
     });
-    popup.appendChild(item);
+    list.appendChild(item);
   }
 
+  const footer = document.createElement("div");
+  footer.className = "pw-footer";
+
+  const autoSubmitLabel = document.createElement("label");
+  autoSubmitLabel.className = "pw-autosubmit-label";
+
+  const autoSubmitIcon = document.createElement("span");
+  autoSubmitIcon.className = "pw-autosubmit-icon";
+  autoSubmitIcon.textContent = "⚡";
+
+  const autoSubmitCheckbox = document.createElement("input");
+  autoSubmitCheckbox.type = "checkbox";
+  autoSubmitCheckbox.className = "pw-autosubmit-checkbox";
+  autoSubmitCheckbox.checked = autoSubmitEnabled;
+
+  const autoSubmitText = document.createElement("span");
+  autoSubmitText.textContent = "Auto submit";
+
+  autoSubmitCheckbox.addEventListener("change", () => {
+    autoSubmitEnabled = autoSubmitCheckbox.checked;
+    chrome.storage.local.set({ [AUTO_SUBMIT_STORAGE_KEY]: autoSubmitEnabled });
+  });
+
+  autoSubmitLabel.appendChild(autoSubmitIcon);
+  autoSubmitLabel.appendChild(autoSubmitCheckbox);
+  autoSubmitLabel.appendChild(autoSubmitText);
+  footer.appendChild(autoSubmitLabel);
+  popup.appendChild(footer);
   shadow.appendChild(style);
   shadow.appendChild(popup);
   document.body.appendChild(host);
 }
 
 function escapeHtml(str: string): string {
-  return str.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+  return str
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
 }
 
 async function onInputFocus(event: FocusEvent) {
@@ -170,14 +264,24 @@ async function onInputFocus(event: FocusEvent) {
   if (!input || input.disabled || input.readOnly) return;
   const type = input.type.toLowerCase();
   const isPassword = isPasswordField(input);
-  const isUsername = !isPassword && (type === "text" || type === "email") && isUsernameField(input);
+  const isUsername =
+    !isPassword &&
+    (type === "text" || type === "email") &&
+    isUsernameField(input);
   if (!isPassword && !isUsername) return;
 
-  const matching: PasswordEntry[] = await chrome.runtime.sendMessage({ type: "GET_SITE_PASSWORDS" });
+  const matching: PasswordEntry[] = await chrome.runtime.sendMessage({
+    type: "GET_SITE_PASSWORDS",
+  });
 
   if (!matching || matching.length === 0) return;
 
-  showAutofillPopup(input, matching);
+  const settings = await chrome.storage.local.get({
+    [AUTO_SUBMIT_STORAGE_KEY]: AUTO_SUBMIT_DEFAULT,
+  });
+  const autoSubmitEnabled = settings[AUTO_SUBMIT_STORAGE_KEY] !== false;
+
+  showAutofillPopup(input, matching, autoSubmitEnabled);
 }
 
 function onDocumentFocusOut(event: FocusEvent) {
@@ -196,17 +300,36 @@ function onDocumentFocusOut(event: FocusEvent) {
   }
 }
 
-document.addEventListener("focusin", onInputFocus as unknown as EventListener, true);
-document.addEventListener("focusout", onDocumentFocusOut as EventListener, true);
-document.addEventListener("click", (e) => {
-  const target = e.target as Node;
-  if (autofillPopup && !autofillPopup.contains(target) && target !== autofillTriggerInput) {
-    removeAutofillPopup();
-  }
-}, true);
+document.addEventListener(
+  "focusin",
+  onInputFocus as unknown as EventListener,
+  true,
+);
+document.addEventListener(
+  "focusout",
+  onDocumentFocusOut as EventListener,
+  true,
+);
+document.addEventListener(
+  "click",
+  (e) => {
+    const target = e.target as Node;
+    if (
+      autofillPopup &&
+      !autofillPopup.contains(target) &&
+      target !== autofillTriggerInput
+    ) {
+      removeAutofillPopup();
+    }
+  },
+  true,
+);
 
 function isEditableField(target: Element): boolean {
-  if (target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement) {
+  if (
+    target instanceof HTMLInputElement ||
+    target instanceof HTMLTextAreaElement
+  ) {
     return !target.disabled && !target.readOnly;
   }
   return target instanceof HTMLElement && target.isContentEditable;
@@ -223,7 +346,9 @@ document.addEventListener(
     const input = target.closest("input");
     lastContextInput = input instanceof HTMLInputElement ? input : null;
 
-    const editableTarget = target.closest("input, textarea, [contenteditable='true']");
+    const editableTarget = target.closest(
+      "input, textarea, [contenteditable='true']",
+    );
     if (editableTarget && isEditableField(editableTarget)) {
       // Keep native context menu enabled on editable fields by preventing site handlers.
       event.stopImmediatePropagation();
@@ -246,12 +371,15 @@ chrome.runtime.onMessage.addListener((message) => {
   // Determine the form scope to search for inputs
   // Priority: form > dialog/modal > document
   const form = target?.closest("form") as HTMLFormElement | null;
-  const dialog = target?.closest('[role="dialog"], [aria-modal="true"], .MuiDialog-paper, .modal, dialog') as HTMLElement | null;
+  const dialog = target?.closest(
+    '[role="dialog"], [aria-modal="true"], .MuiDialog-paper, .modal, dialog',
+  ) as HTMLElement | null;
   const scope: ParentNode = form || dialog || document;
 
   // Get all visible, fillable inputs in scope
-  const allInputs = Array.from(scope.querySelectorAll<HTMLInputElement>("input"))
-    .filter((el) => !el.disabled && el.offsetParent !== null);
+  const allInputs = Array.from(
+    scope.querySelectorAll<HTMLInputElement>("input"),
+  ).filter((el) => !el.disabled && el.offsetParent !== null);
 
   // Separate by type, also check label/placeholder/name/id for "password" hint
   const passwordFields = allInputs.filter((el) => isPasswordField(el));
@@ -267,8 +395,20 @@ chrome.runtime.onMessage.addListener((message) => {
   const passwordInput = passwordFields[0] || null;
 
   console.debug("[notes-with-ai] autofill targets", {
-    usernameInput: usernameInput ? { id: usernameInput.id, name: usernameInput.name, type: usernameInput.type } : null,
-    passwordInput: passwordInput ? { id: passwordInput.id, name: passwordInput.name, type: passwordInput.type } : null,
+    usernameInput: usernameInput
+      ? {
+          id: usernameInput.id,
+          name: usernameInput.name,
+          type: usernameInput.type,
+        }
+      : null,
+    passwordInput: passwordInput
+      ? {
+          id: passwordInput.id,
+          name: passwordInput.name,
+          type: passwordInput.type,
+        }
+      : null,
     messageHasPassword: Boolean(message.password),
   });
 
@@ -279,18 +419,13 @@ chrome.runtime.onMessage.addListener((message) => {
     setNativeValue(passwordInput, message.password);
   }
 
-  // Try to click the submit button if available
-  const submitBtn = findSubmitButton(scope);
-  if (submitBtn) {
-    console.debug("[notes-with-ai] clicking submit button", {
-      tag: submitBtn.tagName,
-      type: (submitBtn as HTMLButtonElement).type,
-      text: submitBtn.textContent?.trim().slice(0, 30),
-    });
-    setTimeout(() => submitBtn.click(), 100);
-  } else {
-    console.debug("[notes-with-ai] no submit button found, manual submission required");
-  }
+  chrome.storage.local.get(
+    { [AUTO_SUBMIT_STORAGE_KEY]: AUTO_SUBMIT_DEFAULT },
+    (settings) => {
+      const autoSubmitEnabled = settings[AUTO_SUBMIT_STORAGE_KEY] !== false;
+      attemptAutoSubmit(scope, autoSubmitEnabled);
+    },
+  );
 
   lastContextInput = null;
 
@@ -314,7 +449,10 @@ function isPasswordField(el: HTMLInputElement): boolean {
   ];
 
   // Check associated <label> text
-  const labelEl = el.labels?.[0] || (el.id && document.querySelector<HTMLLabelElement>(`label[for="${el.id}"]`));
+  const labelEl =
+    el.labels?.[0] ||
+    (el.id &&
+      document.querySelector<HTMLLabelElement>(`label[for="${el.id}"]`));
   if (labelEl) {
     hints.push(labelEl.textContent || "");
   }
@@ -335,12 +473,21 @@ function isUsernameField(el: HTMLInputElement): boolean {
   ];
 
   // Check associated <label> text
-  const labelEl = el.labels?.[0] || (el.id && document.querySelector<HTMLLabelElement>(`label[for="${el.id}"]`));
+  const labelEl =
+    el.labels?.[0] ||
+    (el.id &&
+      document.querySelector<HTMLLabelElement>(`label[for="${el.id}"]`));
   if (labelEl) {
     hints.push(labelEl.textContent || "");
   }
 
-  return hints.some((h) => h && /user.?id|user.?name|username|user|email|login|account|phone|mobile/i.test(h));
+  return hints.some(
+    (h) =>
+      h &&
+      /user.?id|user.?name|username|user|email|login|account|phone|mobile/i.test(
+        h,
+      ),
+  );
 }
 
 // Set value using native setter to trigger React/Angular/Vue change detection
@@ -374,7 +521,11 @@ function setNativeValue(el: HTMLInputElement, value: string) {
   el.dispatchEvent(new Event("focus", { bubbles: true }));
   el.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, key: "a" }));
   el.dispatchEvent(
-    new InputEvent("input", { bubbles: true, inputType: "insertText", data: value }),
+    new InputEvent("input", {
+      bubbles: true,
+      inputType: "insertText",
+      data: value,
+    }),
   );
   el.dispatchEvent(new KeyboardEvent("keyup", { bubbles: true, key: "a" }));
   el.dispatchEvent(new Event("change", { bubbles: true }));
@@ -393,30 +544,36 @@ function setNativeValue(el: HTMLInputElement, value: string) {
 function findSubmitButton(scope: ParentNode): HTMLElement | null {
   // 1. Look for input[type="submit"] or button[type="submit"]
   const submitInput = scope.querySelector<HTMLElement>(
-    'input[type="submit"], button[type="submit"]'
+    'input[type="submit"], button[type="submit"]',
   );
   if (submitInput && isVisible(submitInput)) return submitInput;
 
   // 2. Look for buttons with submit-related text
   const buttons = Array.from(
-    scope.querySelectorAll<HTMLElement>("button, [role='button'], a[class*='btn']")
+    scope.querySelectorAll<HTMLElement>(
+      "button, [role='button'], a[class*='btn']",
+    ),
   ).filter(isVisible);
 
-  const submitPattern = /^(sign\s*in|log\s*in|login|submit|continue|next|enter)$/i;
+  const submitPattern =
+    /^(sign\s*in|log\s*in|login|submit|continue|next|enter)$/i;
   for (const btn of buttons) {
     const text = (btn.textContent || "").trim();
     if (submitPattern.test(text)) return btn;
   }
 
   // 3. Fallback: button without explicit type (defaults to submit in forms)
-  const defaultButton = scope.querySelector<HTMLButtonElement>(
-    "button:not([type])"
-  );
+  const defaultButton =
+    scope.querySelector<HTMLButtonElement>("button:not([type])");
   if (defaultButton && isVisible(defaultButton)) return defaultButton;
 
   return null;
 }
 
 function isVisible(el: HTMLElement): boolean {
-  return el.offsetParent !== null && !el.hidden && getComputedStyle(el).visibility !== "hidden";
+  return (
+    el.offsetParent !== null &&
+    !el.hidden &&
+    getComputedStyle(el).visibility !== "hidden"
+  );
 }
