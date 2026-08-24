@@ -27,6 +27,7 @@ export default function Passwords() {
   const [showMenu, setShowMenu] = useState(false);
   const [draggedEntryId, setDraggedEntryId] = useState<string | null>(null);
   const [dragOverEntryId, setDragOverEntryId] = useState<string | null>(null);
+  const [collapsedSites, setCollapsedSites] = useState<Set<string>>(new Set());
   const menuRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
@@ -358,18 +359,47 @@ export default function Passwords() {
           )}
 
           {entries.length === 0 && <p className="empty">No saved passwords</p>}
-          {Object.entries(
-            entries.reduce<Record<string, PasswordEntry[]>>((groups, entry) => {
+          {(() => {
+            const grouped = entries.reduce<Record<string, PasswordEntry[]>>((groups, entry) => {
               const key = resolveAssociatedSite(entry.site || 'other', associations);
               if (!groups[key]) groups[key] = [];
               groups[key].push(entry);
               return groups;
-            }, {})
-          ).map(([site, groupEntries]) => (
+            }, {});
+            const mergedSitesMap: Record<string, string[]> = {};
+            for (const key of Object.keys(grouped)) {
+              const uniqueSites = [...new Set(grouped[key].map(e => normalizeSite(e.site || 'other')))];
+              mergedSitesMap[key] = uniqueSites.filter(s => s !== key);
+            }
+            return Object.entries(grouped);
+          })().sort(([a], [b]) => {
+            const resolvedActive = activeSite ? resolveAssociatedSite(activeSite, associations) : '';
+            const aMatch = normalizeSite(a) === resolvedActive ? -1 : 0;
+            const bMatch = normalizeSite(b) === resolvedActive ? -1 : 0;
+            return aMatch - bMatch;
+          }).map(([site, groupEntries]) => {
+            const isCollapsed = collapsedSites.has(site);
+            const linkedSites = [...new Set(groupEntries.map(e => normalizeSite(e.site || 'other')))].filter(s => s !== site);
+            return (
             <div key={site} className="site-group">
-              <div className="site-group-header">
-                <span>{site}</span>
-                <div className="site-group-tools">
+              <div
+                className="site-group-header"
+                onClick={() => setCollapsedSites(prev => {
+                  const next = new Set(prev);
+                  if (next.has(site)) next.delete(site);
+                  else next.add(site);
+                  return next;
+                })}
+              >
+                <span className="site-group-title">
+                  <span className={`collapse-arrow${isCollapsed ? ' collapsed' : ''}`}>▼</span>
+                  {site}
+                  {linkedSites.length > 0 && (
+                    <span className="linked-sites">({linkedSites.join(', ')})</span>
+                  )}
+                  <span className="site-group-count">{groupEntries.length}</span>
+                </span>
+                <div className="site-group-tools" onClick={e => e.stopPropagation()}>
                   {activeSite && normalizeSite(activeSite) !== normalizeSite(site) && (
                     <button
                       className="link-btn"
@@ -390,7 +420,7 @@ export default function Passwords() {
                   >🔗</a>
                 </div>
               </div>
-              {groupEntries.map(entry => (
+              {!isCollapsed && groupEntries.map(entry => (
                   <div
                     key={entry.id}
                     className={`card draggable-card${dragOverEntryId === entry.id ? ' drag-over' : ''}`}
@@ -444,7 +474,8 @@ export default function Passwords() {
                 </div>
               ))}
             </div>
-          ))}
+            );
+          })}
         </>
       )}
     </div>

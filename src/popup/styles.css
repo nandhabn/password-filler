@@ -271,6 +271,42 @@ button.primary:hover {
   border-bottom: 1px solid #333;
   margin-bottom: 6px;
   text-transform: lowercase;
+  cursor: pointer;
+  user-select: none;
+}
+
+.site-group-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.collapse-arrow {
+  font-size: 10px;
+  transition: transform 0.2s;
+  display: inline-block;
+}
+
+.collapse-arrow.collapsed {
+  transform: rotate(-90deg);
+}
+
+.linked-sites {
+  font-size: 10px;
+  font-weight: 400;
+  color: #888;
+}
+
+.site-group-count {
+  font-size: 10px;
+  font-weight: 500;
+  background: #333;
+  color: #ccc;
+  border-radius: 8px;
+  padding: 1px 6px;
+  min-width: 16px;
+  text-align: center;
 }
 
 .site-group-tools {

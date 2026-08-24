@@ -209,9 +209,12 @@ function showAutofillPopup(
           const t = el.type.toLowerCase();
           return (t === "text" || t === "email") && isUsernameField(el);
         }) || null;
-      const passwordInput = allInputs.find((el) => isPasswordField(el)) || null;
+      const passwordInputs = allInputs.filter((el) => isPasswordField(el));
       if (usernameInput) setNativeValue(usernameInput, entry.username);
-      if (passwordInput) setNativeValue(passwordInput, entry.password);
+      for (const pwInput of passwordInputs) {
+        setNativeValue(pwInput, entry.password);
+      }
+      fillCommentFieldRandomly(scope);
 
       attemptAutoSubmit(scope, autoSubmitEnabled);
     });
@@ -392,7 +395,6 @@ chrome.runtime.onMessage.addListener((message) => {
 
   // Only fill within the form scope — do NOT widen to document
   const usernameInput = usernameFields[0] || null;
-  const passwordInput = passwordFields[0] || null;
 
   console.debug("[notes-with-ai] autofill targets", {
     usernameInput: usernameInput
@@ -402,22 +404,21 @@ chrome.runtime.onMessage.addListener((message) => {
           type: usernameInput.type,
         }
       : null,
-    passwordInput: passwordInput
-      ? {
-          id: passwordInput.id,
-          name: passwordInput.name,
-          type: passwordInput.type,
-        }
-      : null,
+    passwordFields: passwordFields.map((el) => ({
+      id: el.id,
+      name: el.name,
+      type: el.type,
+    })),
     messageHasPassword: Boolean(message.password),
   });
 
   if (usernameInput) {
     setNativeValue(usernameInput, message.username);
   }
-  if (passwordInput) {
-    setNativeValue(passwordInput, message.password);
+  for (const pwInput of passwordFields) {
+    setNativeValue(pwInput, message.password);
   }
+  fillCommentFieldRandomly(scope);
 
   chrome.storage.local.get(
     { [AUTO_SUBMIT_STORAGE_KEY]: AUTO_SUBMIT_DEFAULT },
@@ -576,4 +577,52 @@ function isVisible(el: HTMLElement): boolean {
     !el.hidden &&
     getComputedStyle(el).visibility !== "hidden"
   );
+}
+
+const RANDOM_COMMENTS = [
+  "Looks good!",
+  "No comments.",
+  "All fine.",
+  "Approved.",
+  "OK",
+  "Nothing to add.",
+  "Confirmed.",
+];
+
+function isCommentField(el: HTMLInputElement | HTMLTextAreaElement): boolean {
+  const hints = [
+    el.placeholder,
+    el.name,
+    el.id,
+    el.getAttribute("aria-label") || "",
+  ];
+  const labelEl =
+    el.labels?.[0] ||
+    (el.id &&
+      document.querySelector<HTMLLabelElement>(`label[for="${el.id}"]`));
+  if (labelEl) {
+    hints.push(labelEl.textContent || "");
+  }
+  return hints.some(
+    (h) => h && /comment|comments|remarks|note|notes|feedback|reason/i.test(h),
+  );
+}
+
+function fillCommentFieldRandomly(scope: ParentNode) {
+  const textareas = Array.from(
+    scope.querySelectorAll<HTMLTextAreaElement>("textarea"),
+  ).filter((el) => !el.disabled && el.offsetParent !== null && isCommentField(el));
+
+  const textInputs = Array.from(
+    scope.querySelectorAll<HTMLInputElement>("input[type='text']"),
+  ).filter((el) => !el.disabled && el.offsetParent !== null && isCommentField(el));
+
+  const commentFields = [...textareas, ...textInputs];
+  if (commentFields.length === 0) return;
+
+  const comment =
+    RANDOM_COMMENTS[Math.floor(Math.random() * RANDOM_COMMENTS.length)];
+  for (const field of commentFields) {
+    setNativeValue(field as unknown as HTMLInputElement, comment);
+  }
 }
