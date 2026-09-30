@@ -1,4 +1,14 @@
+export interface PasswordEntry {
+  id?: string;
+  site: string;
+  tenant?: string;
+  username: string;
+  password: string;
+  notes?: string;
+}
+
 const PARENT_MENU_ID = "autofill-password";
+const tabSessionSites = new Map<number, string>();
 
 chrome.runtime.onInstalled.addListener(() => {
   buildContextMenu();
@@ -16,40 +26,124 @@ chrome.tabs.onActivated.addListener(() => {
   buildContextMenu();
 });
 
-chrome.tabs.onUpdated.addListener((_tabId, changeInfo) => {
+// Tab removal: clean up in-memory session cache and storage
+chrome.tabs.onRemoved.addListener((tabId) => {
+  clearTabSessionSite(tabId);
+});
+
+// Rebuild menu and check for login page navigation to reset session
+chrome.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
+  const url = changeInfo.url || tab.url;
+  if (url && isLoginUrl(url)) {
+    const existing = await getTabSessionSite(tabId);
+    if (existing) {
+      console.debug(`[notes-with-ai] Tab ${tabId} returned to login (${url}), resetting session site: ${existing}`);
+      await clearTabSessionSite(tabId);
+      buildContextMenu();
+    }
+  }
+
   if (changeInfo.url || changeInfo.status === "complete") {
     buildContextMenu();
   }
 });
 
-async function getActiveTabHostname(): Promise<string> {
+export function isLoginUrl(url: string): boolean {
+  if (!url) return false;
   try {
-    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-    if (tab?.url) {
-      return new URL(tab.url).hostname;
-    }
+    const parsed = new URL(url);
+    const path = parsed.pathname.toLowerCase();
+    const search = parsed.search.toLowerCase();
+    const hash = parsed.hash.toLowerCase();
+
+    // Check path for common login/auth/logout keywords
+    const loginPattern = /(^|\/)(login|signin|sign-in|log-in|auth|authenticate|sso|cas|saml|logout|signout|sign-out)($|\/|\.|\?)/i;
+    if (loginPattern.test(path)) return true;
+
+    // Check query params or hash fragments
+    if (/[?&#](login|signin|auth|logout)/i.test(search + hash)) return true;
   } catch {
-    // ignore
+    return false;
+  }
+  return false;
+}
+
+async function getTabSessionSite(tabId: number): Promise<string> {
+  if (tabSessionSites.has(tabId)) {
+    return tabSessionSites.get(tabId) || "";
+  }
+  try {
+    if (chrome.storage?.session) {
+      const key = `session_site_${tabId}`;
+      const res = await chrome.storage.session.get(key);
+      const site = res[key] || "";
+      if (site) tabSessionSites.set(tabId, site);
+      return site;
+    }
+  } catch (e) {
+    console.debug("[notes-with-ai] storage.session get error", e);
   }
   return "";
+}
+
+async function setTabSessionSite(tabId: number, site: string): Promise<void> {
+  const normalized = normalizeSite(site);
+  tabSessionSites.set(tabId, normalized);
+  try {
+    if (chrome.storage?.session) {
+      const key = `session_site_${tabId}`;
+      await chrome.storage.session.set({ [key]: normalized });
+    }
+  } catch (e) {
+    console.debug("[notes-with-ai] storage.session set error", e);
+  }
+}
+
+async function clearTabSessionSite(tabId: number): Promise<void> {
+  tabSessionSites.delete(tabId);
+  try {
+    if (chrome.storage?.session) {
+      const key = `session_site_${tabId}`;
+      await chrome.storage.session.remove(key);
+    }
+  } catch (e) {
+    console.debug("[notes-with-ai] storage.session remove error", e);
+  }
+}
+
+async function getActiveTab(): Promise<chrome.tabs.Tab | null> {
+  try {
+    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    return tab || null;
+  } catch {
+    return null;
+  }
 }
 
 async function buildContextMenu() {
   await chrome.contextMenus.removeAll();
 
+  const activeTab = await getActiveTab();
+  if (!activeTab?.id) return;
+
   const result = await chrome.storage.local.get(["passwords", "siteAssociations"]);
-  const allPasswords: Array<{ id?: string; site: string; username: string; password: string }> =
-    result.passwords || [];
+  const allPasswords: PasswordEntry[] = result.passwords || [];
   const siteAssociations: Record<string, string> = result.siteAssociations || {};
 
-  const hostname = await getActiveTabHostname();
-  const resolvedHostname = resolveAssociatedSite(hostname, siteAssociations);
+  let hostname = "";
+  try {
+    if (activeTab.url) hostname = new URL(activeTab.url).hostname.toLowerCase();
+  } catch {}
 
-  // Filter to entries matching the current site
-  const sitePasswords = resolvedHostname
+  const resolvedHostname = resolveAssociatedSite(hostname, siteAssociations);
+  const sessionSite = await getTabSessionSite(activeTab.id);
+  const targetSite = sessionSite || resolvedHostname;
+
+  // Filter to entries matching targetSite
+  const sitePasswords = targetSite
     ? allPasswords.filter((p) => {
         const resolvedSite = resolveAssociatedSite(p.site, siteAssociations);
-        return siteMatches(resolvedHostname, resolvedSite);
+        return siteMatches(targetSite, resolvedSite);
       })
     : [];
 
@@ -67,19 +161,34 @@ async function buildContextMenu() {
     return;
   }
 
+  const formatTitle = (p: PasswordEntry): string => {
+    const tenantStr = p.tenant ? `[${p.tenant}] ` : "";
+    if (showingAll) {
+      return `${p.site} — ${tenantStr}${p.username}`;
+    }
+    return `${tenantStr}${p.username}`;
+  };
+
   if (passwords.length === 1) {
+    const titlePrefix = sessionSite ? `Autofill (${sessionSite}): ` : "Autofill: ";
     chrome.contextMenus.create({
       id: `${PARENT_MENU_ID}::0`,
-      title: `Autofill: ${passwords[0].site} (${passwords[0].username})`,
+      title: `${titlePrefix}${formatTitle(passwords[0])}`,
       contexts: ["editable"],
     });
     return;
   }
 
   // Multiple entries — parent with children
+  const parentTitle = sessionSite
+    ? `Autofill (${sessionSite})`
+    : showingAll
+    ? "Autofill Password (all)"
+    : "Autofill Password";
+
   chrome.contextMenus.create({
     id: PARENT_MENU_ID,
-    title: showingAll ? "Autofill Password (all)" : "Autofill Password",
+    title: parentTitle,
     contexts: ["editable"],
   });
 
@@ -87,7 +196,7 @@ async function buildContextMenu() {
     chrome.contextMenus.create({
       id: `${PARENT_MENU_ID}::${index}`,
       parentId: PARENT_MENU_ID,
-      title: `${entry.site} — ${entry.username}`,
+      title: formatTitle(entry),
       contexts: ["editable"],
     });
   });
@@ -100,19 +209,23 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
   const parts = menuId.split("::");
   const index = parts.length > 1 ? parseInt(parts[1], 10) : 0;
 
-  const result = await chrome.storage.local.get(["passwords"]);
-  const allPasswords: Array<{ site: string; username: string; password: string }> =
-    result.passwords || [];
-  const associationsResult = await chrome.storage.local.get(["siteAssociations"]);
-  const siteAssociations: Record<string, string> = associationsResult.siteAssociations || {};
+  const result = await chrome.storage.local.get(["passwords", "siteAssociations"]);
+  const allPasswords: PasswordEntry[] = result.passwords || [];
+  const siteAssociations: Record<string, string> = result.siteAssociations || {};
 
-  const hostname = tab.url ? new URL(tab.url).hostname : "";
+  let hostname = "";
+  try {
+    if (tab.url) hostname = new URL(tab.url).hostname.toLowerCase();
+  } catch {}
+
   const resolvedHostname = resolveAssociatedSite(hostname, siteAssociations);
+  const sessionSite = await getTabSessionSite(tab.id);
+  const targetSite = sessionSite || resolvedHostname;
 
-  const sitePasswords = resolvedHostname
+  const sitePasswords = targetSite
     ? allPasswords.filter((p) => {
         const resolvedSite = resolveAssociatedSite(p.site, siteAssociations);
-        return siteMatches(resolvedHostname, resolvedSite);
+        return siteMatches(targetSite, resolvedSite);
       })
     : [];
 
@@ -122,10 +235,17 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
 
   const match = passwords[index];
 
+  // If tab didn't have session site yet, persist match.site as session site
+  if (!sessionSite && match.site) {
+    await setTabSessionSite(tab.id, match.site);
+  }
+
   const payload = {
     type: "AUTOFILL",
     username: match.username,
     password: match.password,
+    tenant: match.tenant,
+    site: match.site,
   };
 
   if (typeof info.frameId === "number" && info.frameId >= 0) {
@@ -139,44 +259,103 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
 });
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-  if (message.type !== "GET_SITE_PASSWORDS") return false;
+  if (message.type === "GET_AUTOFILL_DATA" || message.type === "GET_SITE_PASSWORDS") {
+    (async () => {
+      const tabId = sender.tab?.id;
+      const tabUrl = sender.tab?.url || "";
 
-  const tabUrl = sender.tab?.url;
+      const result = await chrome.storage.local.get(["passwords", "siteAssociations"]);
+      const allPasswords: PasswordEntry[] = result.passwords || [];
+      const siteAssociations: Record<string, string> = result.siteAssociations || {};
 
-  chrome.storage.local.get(["passwords", "siteAssociations"], (result) => {
-    const allPasswords: Array<{ id: string; site: string; username: string; password: string }> =
-      result.passwords || [];
-    const siteAssociations: Record<string, string> = result.siteAssociations || {};
+      let hostname = "";
+      try {
+        if (tabUrl) hostname = new URL(tabUrl).hostname.toLowerCase();
+      } catch {}
 
-    if (!tabUrl) {
-      sendResponse([]);
-      return;
-    }
+      const sessionSite = tabId ? await getTabSessionSite(tabId) : "";
+      const isLogin = isLoginUrl(tabUrl);
 
-    let hostname = "";
-    try {
-      hostname = new URL(tabUrl).hostname.toLowerCase();
-    } catch {
-      sendResponse([]);
-      return;
-    }
+      // Collect all distinct sites available in storage
+      const allSites = Array.from(
+        new Set(allPasswords.map((p) => normalizeSite(p.site)).filter(Boolean))
+      ).sort();
 
-    const resolvedHostname = resolveAssociatedSite(hostname, siteAssociations);
+      const activeTarget = sessionSite || (hostname ? resolveAssociatedSite(hostname, siteAssociations) : "");
 
-    const matching = allPasswords.filter((p) => {
-      const resolvedSite = resolveAssociatedSite(p.site, siteAssociations);
-      return siteMatches(resolvedHostname, resolvedSite);
-    });
+      const matching = activeTarget
+        ? allPasswords.filter((p) => {
+            const resolvedSite = resolveAssociatedSite(p.site, siteAssociations);
+            return siteMatches(activeTarget, resolvedSite);
+          })
+        : [];
 
-    sendResponse(matching);
-  });
+      // If legacy GET_SITE_PASSWORDS call without full data requested:
+      if (message.type === "GET_SITE_PASSWORDS" && !message.wantsFullData) {
+        sendResponse(matching);
+        return;
+      }
 
-  return true; // keep channel open for async sendResponse
+      sendResponse({
+        sessionSite,
+        activeTarget,
+        matching,
+        allSites,
+        isLoginPage: isLogin,
+        hostname,
+        allPasswords,
+      });
+    })();
+    return true; // Keep channel open for async sendResponse
+  }
+
+  if (message.type === "SET_SESSION_SITE") {
+    (async () => {
+      const tabId = message.tabId || sender.tab?.id;
+      if (tabId && message.site) {
+        await setTabSessionSite(tabId, message.site);
+        buildContextMenu();
+        sendResponse({ success: true, site: message.site });
+      } else {
+        sendResponse({ success: false });
+      }
+    })();
+    return true;
+  }
+
+  if (message.type === "RESET_SESSION_SITE") {
+    (async () => {
+      const tabId = message.tabId || sender.tab?.id;
+      if (tabId) {
+        await clearTabSessionSite(tabId);
+        buildContextMenu();
+        sendResponse({ success: true });
+      } else {
+        sendResponse({ success: false });
+      }
+    })();
+    return true;
+  }
+
+  if (message.type === "GET_SESSION_SITE") {
+    (async () => {
+      let tabId = message.tabId;
+      if (!tabId) {
+        const activeTab = await getActiveTab();
+        tabId = activeTab?.id;
+      }
+      const sessionSite = tabId ? await getTabSessionSite(tabId) : "";
+      sendResponse({ sessionSite, tabId });
+    })();
+    return true;
+  }
+
+  return false;
 });
 
 async function safeSendMessage(
   tabId: number,
-  payload: { type: string; username: string; password: string },
+  payload: { type: string; username: string; password: string; tenant?: string; site?: string },
   frameId?: number,
 ): Promise<boolean> {
   return new Promise((resolve) => {
