@@ -1,4 +1,17 @@
 import { useEffect, useId, useMemo, useRef, useState } from 'react';
+import { decryptJSON, deriveKeyRawB64, encryptJSON, generateSaltB64, importAesKey } from '../../shared/crypto';
+import {
+  DELETED_PASSWORDS_STORAGE_KEY,
+  PASSWORDS_STORAGE_KEY,
+  getUnlockedKey,
+  isVaultConfigured,
+  loadEncryptedList,
+  lockVault,
+  saveEncryptedList,
+  setupVault,
+  touchActivity,
+  unlockVault,
+} from '../../shared/vault';
 
 export interface PasswordEntry {
   id: string;
@@ -6,7 +19,6 @@ export interface PasswordEntry {
   tenant?: string;
   username: string;
   password: string;
-  notes?: string;
 }
 
 export interface DeletedPasswordEntry extends PasswordEntry {
@@ -15,7 +27,7 @@ export interface DeletedPasswordEntry extends PasswordEntry {
 
 type SiteAssociations = Record<string, string>;
 
-export default function Passwords() {
+function PasswordsWorkspace({ vaultKey, onLock }: { vaultKey: CryptoKey; onLock: () => void }) {
   const [entries, setEntries] = useState<PasswordEntry[]>([]);
   const [deletedEntries, setDeletedEntries] = useState<DeletedPasswordEntry[]>([]);
   const [visibleIds, setVisibleIds] = useState<Set<string>>(new Set());
@@ -71,11 +83,16 @@ export default function Passwords() {
   };
 
   useEffect(() => {
-    chrome.storage.local.get(['passwords', 'siteAssociations', 'deletedPasswords'], (result) => {
-      setEntries(result.passwords || []);
-      setAssociations(result.siteAssociations || {});
-      setDeletedEntries(result.deletedPasswords || []);
-    });
+    (async () => {
+      const [pwEntries, delEntries, assocResult] = await Promise.all([
+        loadEncryptedList<PasswordEntry>(vaultKey, PASSWORDS_STORAGE_KEY),
+        loadEncryptedList<DeletedPasswordEntry>(vaultKey, DELETED_PASSWORDS_STORAGE_KEY),
+        chrome.storage.local.get(['siteAssociations']),
+      ]);
+      setEntries(pwEntries);
+      setDeletedEntries(delEntries);
+      setAssociations(assocResult.siteAssociations || {});
+    })();
 
     chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
       const tab = tabs[0];
@@ -113,12 +130,14 @@ export default function Passwords() {
 
   const saveEntries = (updated: PasswordEntry[]) => {
     setEntries(updated);
-    chrome.storage.local.set({ passwords: updated });
+    saveEncryptedList(vaultKey, PASSWORDS_STORAGE_KEY, updated);
+    touchActivity();
   };
 
   const saveDeletedEntries = (updated: DeletedPasswordEntry[]) => {
     setDeletedEntries(updated);
-    chrome.storage.local.set({ deletedPasswords: updated });
+    saveEncryptedList(vaultKey, DELETED_PASSWORDS_STORAGE_KEY, updated);
+    touchActivity();
   };
 
   const resolveAssociatedSite = (site: string, map: SiteAssociations) => {
@@ -291,6 +310,8 @@ export default function Passwords() {
   };
 
   const clearDeletedEntries = () => {
+    if (deletedEntries.length === 0) return;
+    if (!window.confirm(`Permanently delete all ${deletedEntries.length} recently deleted password(s)? This cannot be undone.`)) return;
     saveDeletedEntries([]);
   };
 
@@ -382,6 +403,7 @@ export default function Passwords() {
     const normSite = normalizeSite(bulkTargetSite);
 
     if (!bulkTargetTenant || !bulkNewName.trim() || normOld === normNew) return;
+    if (!window.confirm(`Rename tenant "${bulkTargetTenant}" to "${bulkNewName.trim()}" for ${bulkAffectedCount} password(s)?`)) return;
 
     let count = 0;
     const updated = entries.map((e) => {
@@ -412,6 +434,7 @@ export default function Passwords() {
     const normOld = normalizeSite(bulkTargetSite);
     const normNew = normalizeSite(bulkNewName);
     if (!normOld || !normNew || normOld === normNew) return;
+    if (!window.confirm(`Rename site "${bulkTargetSite}" to "${normNew}" for ${bulkAffectedCount} password(s)?`)) return;
 
     let count = 0;
     const updated = entries.map((e) => {
@@ -452,6 +475,7 @@ export default function Passwords() {
 
   const executeFindAndReplace = () => {
     if (!findText) return;
+    if (!window.confirm(`Apply find & replace to ${bulkAffectedCount} password(s)?`)) return;
 
     let count = 0;
     const updated = entries.map((e) => {
@@ -617,10 +641,26 @@ export default function Passwords() {
     setEditPassword(newEntry.password);
   };
 
-  const exportPasswords = () => {
+  const exportPasswords = async () => {
     if (entries.length === 0) return;
-    const data = JSON.stringify(entries, null, 2);
-    const blob = new Blob([data], { type: 'application/json' });
+    const exportPassword = window.prompt(
+      'Set a password to encrypt this export file (you will need it to import the file later).\n\nLeave blank to export as plain, unencrypted JSON (not recommended).',
+    );
+    if (exportPassword === null) return;
+
+    let payloadStr: string;
+    if (exportPassword.trim()) {
+      const salt = generateSaltB64();
+      const rawKeyB64 = await deriveKeyRawB64(exportPassword.trim(), salt);
+      const exportKey = await importAesKey(rawKeyB64);
+      const encrypted = await encryptJSON(exportKey, entries);
+      payloadStr = JSON.stringify({ version: 1, encrypted: true, salt, ...encrypted });
+    } else {
+      if (!window.confirm('Export as plain, unencrypted JSON? Anyone with this file can read all your saved passwords.')) return;
+      payloadStr = JSON.stringify(entries, null, 2);
+    }
+
+    const blob = new Blob([payloadStr], { type: 'application/json' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
@@ -637,11 +677,29 @@ export default function Passwords() {
       const file = (e.target as HTMLInputElement).files?.[0];
       if (!file) return;
       const reader = new FileReader();
-      reader.onload = (ev) => {
+      reader.onload = async (ev) => {
         try {
-          const imported = JSON.parse(ev.target?.result as string);
-          if (!Array.isArray(imported)) return;
-          const valid: PasswordEntry[] = imported
+          const parsed = JSON.parse(ev.target?.result as string);
+          let importedList: any[] | null = null;
+
+          if (parsed && parsed.encrypted && parsed.salt && parsed.iv && parsed.data) {
+            const importPassword = window.prompt('Enter the password used to encrypt this export file:');
+            if (!importPassword) return;
+            const rawKeyB64 = await deriveKeyRawB64(importPassword, parsed.salt);
+            const importKey = await importAesKey(rawKeyB64);
+            try {
+              importedList = await decryptJSON<any[]>(importKey, { iv: parsed.iv, data: parsed.data });
+            } catch {
+              window.alert('Incorrect password or corrupted file.');
+              return;
+            }
+          } else if (Array.isArray(parsed)) {
+            if (!window.confirm('This file is unencrypted. Import anyway?')) return;
+            importedList = parsed;
+          }
+
+          if (!Array.isArray(importedList)) return;
+          const valid: PasswordEntry[] = importedList
             .filter((item: any) => item.site && item.username && item.password)
             .map((item: any) => ({
               id: crypto.randomUUID(),
@@ -799,6 +857,7 @@ export default function Passwords() {
             <div className="more-menu-dropdown">
               <button onClick={openBulkRenameView}>✏️ Bulk Rename...</button>
               <button onClick={openDeletedView}>Recently Deleted ({deletedEntries.length})</button>
+              <button onClick={() => { setShowMenu(false); onLock(); }}>🔒 Lock</button>
             </div>
           )}
         </div>
@@ -1428,4 +1487,138 @@ export default function Passwords() {
       )}
     </div>
   );
+}
+
+type VaultStatus = 'loading' | 'setup' | 'locked' | 'unlocked';
+
+export default function Passwords() {
+  const [status, setStatus] = useState<VaultStatus>('loading');
+  const [vaultKey, setVaultKey] = useState<CryptoKey | null>(null);
+  const [passwordInput, setPasswordInput] = useState('');
+  const [confirmInput, setConfirmInput] = useState('');
+  const [error, setError] = useState('');
+
+  useEffect(() => {
+    (async () => {
+      const configured = await isVaultConfigured();
+      if (!configured) {
+        setStatus('setup');
+        return;
+      }
+      const key = await getUnlockedKey();
+      if (key) {
+        setVaultKey(key);
+        setStatus('unlocked');
+      } else {
+        setStatus('locked');
+      }
+    })();
+  }, []);
+
+  // Auto-lock the open popup if the idle timeout elapses while it's still visible.
+  useEffect(() => {
+    if (status !== 'unlocked') return;
+    const interval = setInterval(async () => {
+      const key = await getUnlockedKey();
+      if (!key) {
+        setVaultKey(null);
+        setStatus('locked');
+      }
+    }, 20000);
+    return () => clearInterval(interval);
+  }, [status]);
+
+  const handleSetup = async () => {
+    setError('');
+    if (passwordInput.length < 8) {
+      setError('Master password must be at least 8 characters.');
+      return;
+    }
+    if (passwordInput !== confirmInput) {
+      setError('Passwords do not match.');
+      return;
+    }
+    const key = await setupVault(passwordInput);
+    chrome.runtime.sendMessage({ type: 'VAULT_UNLOCKED' });
+    setVaultKey(key);
+    setStatus('unlocked');
+    setPasswordInput('');
+    setConfirmInput('');
+  };
+
+  const handleUnlock = async () => {
+    setError('');
+    const key = await unlockVault(passwordInput);
+    if (!key) {
+      setError('Incorrect master password.');
+      return;
+    }
+    chrome.runtime.sendMessage({ type: 'VAULT_UNLOCKED' });
+    setVaultKey(key);
+    setStatus('unlocked');
+    setPasswordInput('');
+  };
+
+  const handleLock = async () => {
+    await lockVault();
+    chrome.runtime.sendMessage({ type: 'VAULT_LOCKED' });
+    setVaultKey(null);
+    setStatus('locked');
+    setPasswordInput('');
+  };
+
+  if (status === 'loading') {
+    return <p className="empty">Loading…</p>;
+  }
+
+  if (status === 'setup') {
+    return (
+      <div className="vault-gate">
+        <h3>🔐 Create a Master Password</h3>
+        <p className="vault-hint">
+          This encrypts all saved passwords on your device. There is no recovery if you forget it — store it
+          somewhere safe.
+        </p>
+        <input
+          type="password"
+          placeholder="Master password (min 8 characters)"
+          value={passwordInput}
+          onChange={(e) => setPasswordInput(e.target.value)}
+        />
+        <input
+          type="password"
+          placeholder="Confirm master password"
+          value={confirmInput}
+          onChange={(e) => setConfirmInput(e.target.value)}
+          onKeyDown={(e) => e.key === 'Enter' && handleSetup()}
+        />
+        {error && <p className="vault-error">{error}</p>}
+        <button className="primary" onClick={handleSetup}>
+          Create &amp; Unlock
+        </button>
+      </div>
+    );
+  }
+
+  if (status === 'locked') {
+    return (
+      <div className="vault-gate">
+        <h3>🔒 Vault Locked</h3>
+        <input
+          type="password"
+          placeholder="Master password"
+          value={passwordInput}
+          onChange={(e) => setPasswordInput(e.target.value)}
+          onKeyDown={(e) => e.key === 'Enter' && handleUnlock()}
+          autoFocus
+        />
+        {error && <p className="vault-error">{error}</p>}
+        <button className="primary" onClick={handleUnlock}>
+          Unlock
+        </button>
+      </div>
+    );
+  }
+
+  return <PasswordsWorkspace vaultKey={vaultKey!} onLock={handleLock} />;
 }

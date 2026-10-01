@@ -1,10 +1,16 @@
+import {
+  PASSWORDS_STORAGE_KEY,
+  getUnlockedKey,
+  loadEncryptedList,
+  touchActivity,
+} from "../shared/vault";
+
 export interface PasswordEntry {
   id?: string;
   site: string;
   tenant?: string;
   username: string;
   password: string;
-  notes?: string;
 }
 
 const PARENT_MENU_ID = "autofill-password";
@@ -16,7 +22,7 @@ chrome.runtime.onInstalled.addListener(() => {
 
 // Rebuild menu whenever passwords change
 chrome.storage.onChanged.addListener((changes, area) => {
-  if (area === "local" && changes.passwords) {
+  if (area === "local" && changes[PASSWORDS_STORAGE_KEY]) {
     buildContextMenu();
   }
 });
@@ -126,8 +132,19 @@ async function buildContextMenu() {
   const activeTab = await getActiveTab();
   if (!activeTab?.id) return;
 
-  const result = await chrome.storage.local.get(["passwords", "siteAssociations"]);
-  const allPasswords: PasswordEntry[] = result.passwords || [];
+  const vaultKey = await getUnlockedKey();
+  if (!vaultKey) {
+    chrome.contextMenus.create({
+      id: PARENT_MENU_ID,
+      title: "🔒 Locked — open the extension to unlock",
+      contexts: ["editable"],
+      enabled: false,
+    });
+    return;
+  }
+
+  const result = await chrome.storage.local.get(["siteAssociations"]);
+  const allPasswords: PasswordEntry[] = await loadEncryptedList<PasswordEntry>(vaultKey, PASSWORDS_STORAGE_KEY);
   const siteAssociations: Record<string, string> = result.siteAssociations || {};
 
   let hostname = "";
@@ -209,8 +226,12 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
   const parts = menuId.split("::");
   const index = parts.length > 1 ? parseInt(parts[1], 10) : 0;
 
-  const result = await chrome.storage.local.get(["passwords", "siteAssociations"]);
-  const allPasswords: PasswordEntry[] = result.passwords || [];
+  const vaultKey = await getUnlockedKey();
+  if (!vaultKey) return;
+  await touchActivity();
+
+  const result = await chrome.storage.local.get(["siteAssociations"]);
+  const allPasswords: PasswordEntry[] = await loadEncryptedList<PasswordEntry>(vaultKey, PASSWORDS_STORAGE_KEY);
   const siteAssociations: Record<string, string> = result.siteAssociations || {};
 
   let hostname = "";
@@ -264,8 +285,14 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       const tabId = sender.tab?.id;
       const tabUrl = sender.tab?.url || "";
 
-      const result = await chrome.storage.local.get(["passwords", "siteAssociations"]);
-      const allPasswords: PasswordEntry[] = result.passwords || [];
+      const vaultKey = await getUnlockedKey();
+      const locked = !vaultKey;
+      if (vaultKey) await touchActivity();
+
+      const result = await chrome.storage.local.get(["siteAssociations"]);
+      const allPasswords: PasswordEntry[] = vaultKey
+        ? await loadEncryptedList<PasswordEntry>(vaultKey, PASSWORDS_STORAGE_KEY)
+        : [];
       const siteAssociations: Record<string, string> = result.siteAssociations || {};
 
       let hostname = "";
@@ -304,6 +331,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         isLoginPage: isLogin,
         hostname,
         allPasswords,
+        locked,
       });
     })();
     return true; // Keep channel open for async sendResponse
@@ -348,6 +376,12 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       sendResponse({ sessionSite, tabId });
     })();
     return true;
+  }
+
+  if (message.type === "VAULT_UNLOCKED" || message.type === "VAULT_LOCKED") {
+    buildContextMenu();
+    sendResponse({ success: true });
+    return false;
   }
 
   return false;

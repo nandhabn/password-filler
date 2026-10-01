@@ -56,6 +56,8 @@ export default function SiteAssociations() {
   };
 
   const clearAllAssociations = () => {
+    if (rows.length === 0) return;
+    if (!window.confirm(`Remove all ${rows.length} website association(s)?`)) return;
     saveAssociations({});
   };
 

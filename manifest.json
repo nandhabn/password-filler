@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
-  "name": "Notes & Password Manager",
-  "description": "Store notes and autofill passwords on selected inputs",
+  "name": "Password Manager",
+  "description": "Store and autofill passwords on selected inputs",
   "version": "1.0.0",
   "permissions": ["storage", "contextMenus", "activeTab", "tabs"],
   "action": {

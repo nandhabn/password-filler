@@ -8,7 +8,6 @@ export interface PasswordEntry {
   tenant?: string;
   username: string;
   password: string;
-  notes?: string;
 }
 
 interface AutofillDataResponse {
@@ -19,6 +18,7 @@ interface AutofillDataResponse {
   isLoginPage: boolean;
   hostname: string;
   allPasswords: PasswordEntry[];
+  locked?: boolean;
 }
 
 const AUTO_SUBMIT_STORAGE_KEY = "autoSubmitEnabled";
@@ -419,6 +419,18 @@ function showAutofillPopup(
 
   // Render contents
   function render() {
+    if (data.locked) {
+      sessionInfo.innerHTML = "";
+      siteRow.style.display = "none";
+      list.innerHTML = "";
+      const lockedMsg = document.createElement("div");
+      lockedMsg.className = "pw-empty";
+      lockedMsg.innerHTML = "🔒 Extension locked. Open the toolbar icon and unlock to autofill.";
+      list.appendChild(lockedMsg);
+      return;
+    }
+    siteRow.style.display = "";
+
     // Render session badge
     sessionInfo.innerHTML = "";
     if (currentSessionSite) {
@@ -626,12 +638,13 @@ async function onInputFocus(event: FocusEvent) {
     if (!data) return;
 
     // Show popup if:
-    // 1. There are matching credentials for this site/session, OR
-    // 2. We are on a login-type field and there are any saved sites available in storage
+    // 1. The vault is locked (so the user knows to unlock it), OR
+    // 2. There are matching credentials for this site/session, OR
+    // 3. We are on a login-type field and there are any saved sites available in storage
     const hasMatching = data.matching && data.matching.length > 0;
     const hasSitesToPick = data.allSites && data.allSites.length > 0;
 
-    if (!hasMatching && !hasSitesToPick) return;
+    if (!data.locked && !hasMatching && !hasSitesToPick) return;
 
     const settings = await chrome.storage.local.get({
       [AUTO_SUBMIT_STORAGE_KEY]: AUTO_SUBMIT_DEFAULT,
