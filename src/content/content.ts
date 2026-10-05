@@ -2,13 +2,10 @@ let lastContextInput: HTMLInputElement | null = null;
 
 // ─── Inline autofill popup (Apple Passwords style with multi-tenant & session site support) ───
 
-export interface PasswordEntry {
-  id: string;
-  site: string;
-  tenant?: string;
-  username: string;
-  password: string;
-}
+import { normalizeSite, siteMatches } from "../models/association.model";
+import { PasswordEntry } from "../models/password.model";
+
+export type { PasswordEntry };
 
 interface AutofillDataResponse {
   sessionSite: string;
@@ -35,17 +32,6 @@ function removeAutofillPopup() {
     autofillShadow = null;
     autofillTriggerInput = null;
   }
-}
-
-function normalizeSite(site: string): string {
-  return (site || "").trim().toLowerCase();
-}
-
-function siteMatches(currentHost: string, configuredSite: string): boolean {
-  if (!currentHost || !configuredSite) return false;
-  const h = normalizeSite(currentHost);
-  const c = normalizeSite(configuredSite);
-  return h.includes(c) || c.includes(h);
 }
 
 function isLoginUrl(url: string): boolean {
@@ -356,6 +342,53 @@ function showAutofillPopup(
       accent-color: #007aff;
       cursor: pointer;
     }
+    .pw-unlock-wrap {
+      padding: 14px 12px;
+    }
+    .pw-unlock-msg {
+      font-size: 12px;
+      color: #4a5568;
+      text-align: center;
+      margin-bottom: 10px;
+      line-height: 1.4;
+    }
+    .pw-unlock-form {
+      display: flex;
+      gap: 6px;
+    }
+    .pw-unlock-input {
+      flex: 1;
+      font-size: 13px;
+      padding: 7px 8px;
+      border: 1px solid #d1d5db;
+      border-radius: 6px;
+      outline: none;
+      color: #111;
+    }
+    .pw-unlock-input:focus {
+      border-color: #007aff;
+    }
+    .pw-unlock-btn {
+      border: none;
+      border-radius: 6px;
+      padding: 7px 12px;
+      background: #007aff;
+      color: #fff;
+      font-size: 12px;
+      font-weight: 600;
+      cursor: pointer;
+    }
+    .pw-unlock-btn:disabled {
+      opacity: 0.6;
+      cursor: default;
+    }
+    .pw-unlock-error {
+      color: #e02424;
+      font-size: 11px;
+      margin-top: 6px;
+      text-align: center;
+      min-height: 14px;
+    }
   `;
 
   const popup = document.createElement("div");
@@ -420,16 +453,11 @@ function showAutofillPopup(
   // Render contents
   function render() {
     if (data.locked) {
-      sessionInfo.innerHTML = "";
-      siteRow.style.display = "none";
-      list.innerHTML = "";
-      const lockedMsg = document.createElement("div");
-      lockedMsg.className = "pw-empty";
-      lockedMsg.innerHTML = "🔒 Extension locked. Open the toolbar icon and unlock to autofill.";
-      list.appendChild(lockedMsg);
+      renderLockedState();
       return;
     }
     siteRow.style.display = "";
+    footer.style.display = "";
 
     // Render session badge
     sessionInfo.innerHTML = "";
@@ -585,6 +613,86 @@ function showAutofillPopup(
         list.appendChild(item);
       }
     }
+  }
+
+  // Lets the user unlock the vault right from the inpage popup instead of
+  // having to open the toolbar icon.
+  function renderLockedState() {
+    sessionInfo.innerHTML = "";
+    siteRow.style.display = "none";
+    footer.style.display = "none";
+    list.innerHTML = "";
+
+    const wrap = document.createElement("div");
+    wrap.className = "pw-unlock-wrap";
+
+    const msg = document.createElement("div");
+    msg.className = "pw-unlock-msg";
+    msg.textContent = "🔒 Vault locked. Enter your master password to autofill.";
+    wrap.appendChild(msg);
+
+    const form = document.createElement("div");
+    form.className = "pw-unlock-form";
+
+    const pwInput = document.createElement("input");
+    pwInput.type = "password";
+    pwInput.className = "pw-unlock-input";
+    pwInput.placeholder = "Master password";
+    pwInput.autocomplete = "off";
+
+    const unlockBtn = document.createElement("button");
+    unlockBtn.type = "button";
+    unlockBtn.className = "pw-unlock-btn";
+    unlockBtn.textContent = "Unlock";
+
+    const errorMsg = document.createElement("div");
+    errorMsg.className = "pw-unlock-error";
+
+    const doUnlock = async () => {
+      const pwd = pwInput.value;
+      if (!pwd) return;
+      unlockBtn.disabled = true;
+      unlockBtn.textContent = "Unlocking…";
+      errorMsg.textContent = "";
+
+      try {
+        const res = await chrome.runtime.sendMessage({ type: "UNLOCK_VAULT", password: pwd });
+        if (res?.success) {
+          const fresh: AutofillDataResponse = await chrome.runtime.sendMessage({ type: "GET_AUTOFILL_DATA" });
+          Object.assign(data, fresh);
+          allPasswords = data.allPasswords || [];
+          allSites = data.allSites || [];
+          currentSessionSite = data.sessionSite || "";
+          selectedSite = currentSessionSite || (data.matching.length > 0 ? data.matching[0].site || "" : "");
+          render();
+          return;
+        }
+        errorMsg.textContent = "Incorrect password. Try again.";
+        pwInput.value = "";
+        pwInput.focus();
+      } catch {
+        errorMsg.textContent = "Could not reach the extension. Try again.";
+      } finally {
+        unlockBtn.disabled = false;
+        unlockBtn.textContent = "Unlock";
+      }
+    };
+
+    pwInput.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") doUnlock();
+    });
+    unlockBtn.addEventListener("click", (e) => {
+      e.preventDefault();
+      doUnlock();
+    });
+
+    form.appendChild(pwInput);
+    form.appendChild(unlockBtn);
+    wrap.appendChild(form);
+    wrap.appendChild(errorMsg);
+    list.appendChild(wrap);
+
+    setTimeout(() => pwInput.focus(), 0);
   }
 
   // Handle site selection change

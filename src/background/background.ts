@@ -1,17 +1,18 @@
 import {
+  normalizeSite,
+  resolveAssociatedSite,
+  siteMatches,
+} from "../models/association.model";
+import { PasswordEntry } from "../models/password.model";
+import {
   PASSWORDS_STORAGE_KEY,
   getUnlockedKey,
   loadEncryptedList,
   touchActivity,
+  unlockVault,
 } from "../shared/vault";
 
-export interface PasswordEntry {
-  id?: string;
-  site: string;
-  tenant?: string;
-  username: string;
-  password: string;
-}
+export type { PasswordEntry };
 
 const PARENT_MENU_ID = "autofill-password";
 const tabSessionSites = new Map<number, string>();
@@ -384,6 +385,19 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return false;
   }
 
+  if (message.type === "UNLOCK_VAULT") {
+    (async () => {
+      const key = await unlockVault(String(message.password || ""));
+      if (key) {
+        buildContextMenu();
+        sendResponse({ success: true });
+      } else {
+        sendResponse({ success: false });
+      }
+    })();
+    return true;
+  }
+
   return false;
 });
 
@@ -420,23 +434,3 @@ async function safeSendMessage(
   });
 }
 
-function normalizeSite(site: string): string {
-  return site.trim().toLowerCase();
-}
-
-function resolveAssociatedSite(site: string, map: Record<string, string>): string {
-  let current = normalizeSite(site);
-  const visited = new Set<string>();
-
-  while (map[current] && !visited.has(current)) {
-    visited.add(current);
-    current = normalizeSite(map[current]);
-  }
-
-  return current;
-}
-
-function siteMatches(currentHost: string, configuredSite: string): boolean {
-  if (!currentHost || !configuredSite) return false;
-  return currentHost.includes(configuredSite) || configuredSite.includes(currentHost);
-}

@@ -1,31 +1,14 @@
 import { useState } from 'react';
+import { ActiveTab, AppView } from '../views/AppView';
 import Passwords from './components/Passwords';
 import SiteAssociations from './components/SiteAssociations';
 
-type Tab = 'passwords' | 'associations';
-
 export default function App() {
-  const [activeTab, setActiveTab] = useState<Tab>('passwords');
+  const [activeTab, setActiveTab] = useState<ActiveTab>('passwords');
 
   return (
-    <div className="app">
-      <header className="tabs">
-        <button
-          className={activeTab === 'passwords' ? 'active' : ''}
-          onClick={() => setActiveTab('passwords')}
-        >
-          🔑 Passwords
-        </button>
-        <button
-          className={activeTab === 'associations' ? 'active' : ''}
-          onClick={() => setActiveTab('associations')}
-        >
-          🌐 Associations
-        </button>
-      </header>
-      <main>
-        {activeTab === 'passwords' ? <Passwords /> : <SiteAssociations />}
-      </main>
-    </div>
+    <AppView activeTab={activeTab} onTabChange={setActiveTab}>
+      {activeTab === 'passwords' ? <Passwords /> : <SiteAssociations />}
+    </AppView>
   );
 }
